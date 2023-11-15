@@ -1,24 +1,34 @@
-import logo from './logo.svg';
-import './App.css';
+import React from 'react';
+import { BrowserRouter as Router, Route, Link, Routes } from 'react-router-dom'; // Perhatikan penggunaan Routes
+import UploadImageNative from './UploadImageNative';
+import Home from './Home';
+import UploadImage from './UploadImage';
 
 function App() {
   return (
-    <div className="App">
-      <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/App.js</code> and save to reload.
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
-      </header>
-    </div>
+    <Router>
+      <div>
+        <nav>
+          <ul>
+            <li>
+              <Link to="/">Beranda</Link>
+            </li>
+            <li>
+              <Link to="/upload">Unggah Gambar dengan Libary</Link>              
+            </li>
+            <li>
+              <Link to="/native">Unggah Gambar dengan Native</Link>
+            </li>
+          </ul>
+        </nav>
+
+        <Routes> {/* Gantikan Switch */}
+          <Route path="/" element={<Home />} />
+          <Route path="/upload" element={<UploadImage />} />
+          <Route path="/native" element={<UploadImageNative />} />
+        </Routes>
+      </div>
+    </Router>
   );
 }
 
