@@ -1,51 +1,53 @@
-import React, { useState } from 'react';
+import React from 'react';
 import Resizer from 'react-image-file-resizer';
 
-function UploadImage() {
-  const [selectedImage, setSelectedImage] = useState(null);
-  const [compressionTime, setCompressionTime] = useState(null);
+const UploadImage = () => {
+  const downloadImage = (uri, fileName) => {
+    const link = document.createElement('a');
+    link.href = uri;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   const resizeFile = (file) => {
     return new Promise((resolve) => {
-      const startTime = performance.now(); // Waktu mulai kompresi
       Resizer.imageFileResizer(
         file,
-        300, // maxWidth
-        300, // maxHeight
+        800, // maxWidth
+        800, // maxHeight
         'JPEG', // compressFormat
-        100, // quality
+        70, // quality
         0, // rotation
         (uri) => {
-          const endTime = performance.now(); // Waktu selesai kompresi
-          const timeTaken = endTime - startTime; // Waktu yang diperlukan untuk kompresi
-          setCompressionTime(timeTaken); // Atur lama waktu kompresi ke state
-          resolve(uri);
+          downloadImage(uri, `resized_${file.name}`);
+          resolve();
         },
-        'base64' // outputType
+        'base64', // outputType
+        200, // minWidth
+        200 // minHeight
       );
     });
   };
 
-  const handleImageUpload = async (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      try {
-        const image = await resizeFile(file);
-        setSelectedImage(image);
-      } catch (err) {
-        console.log(err);
-      }
+  const handleFileChange = async (e) => {
+    const files = Array.from(e.target.files);
+    const startTime = performance.now();
+
+    for (let file of files) {
+      await resizeFile(file);
     }
+
+    const endTime = performance.now();
+    console.log(`Total Compression Time (Library) for ${files.length} images: ${(endTime - startTime).toFixed(2)} ms`);
   };
 
   return (
     <div>
-      <label htmlFor="imageUpload">Pilih Gambar:</label>
-      <input type="file" accept="image/*" id="imageUpload" onChange={handleImageUpload} />
-      {selectedImage && <img src={selectedImage} alt="Uploaded" />}
-      {compressionTime && <p>Lama kompresi gambar: {compressionTime.toFixed(2)} ms</p>}
+      <input type="file" multiple onChange={handleFileChange} />
     </div>
   );
-}
+};
 
 export default UploadImage;

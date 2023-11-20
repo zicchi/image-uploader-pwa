@@ -1,67 +1,69 @@
-import React, { useState } from 'react';
+import React from 'react';
 
-function UploadImageNative() {
-  const [selectedImage, setSelectedImage] = useState(null);
-  const [resizedImage, setResizedImage] = useState(null);
-  const [compressionTime, setCompressionTime] = useState(null);
+const UploadImageNative = () => {
+  const downloadImage = (uri, fileName) => {
+    const link = document.createElement('a');
+    link.href = uri;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
-  const handleImageUpload = (e) => {
-    const file = e.target.files[0];
-    if (file) {
+  const resizeAndDownloadImage = (file) => {
+    return new Promise((resolve) => {
       const reader = new FileReader();
-      reader.onload = function (event) {
-        const imageDataUrl = event.target.result;
-
+      reader.onload = (event) => {
         const img = new Image();
-        img.src = imageDataUrl;
-
-        img.onload = function () {
-          const startTime = performance.now(); // Waktu mulai kompresi
-
-          const maxWidth = 300; // Lebar maksimum yang diinginkan
-          const maxHeight = 300; // Tinggi maksimum yang diinginkan
-
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const maxWidth = 800;
+          const maxHeight = 800;
           let width = img.width;
           let height = img.height;
 
-          if (width > maxWidth || height > maxHeight) {
-            if (width / maxWidth > height / maxHeight) {
-              height = (height * maxWidth) / width;
+          if (width > height) {
+            if (width > maxWidth) {
+              height *= maxWidth / width;
               width = maxWidth;
-            } else {
-              width = (width * maxHeight) / height;
+            }
+          } else {
+            if (height > maxHeight) {
+              width *= maxHeight / height;
               height = maxHeight;
             }
           }
-
-          const canvas = document.createElement('canvas');
           canvas.width = width;
           canvas.height = height;
           const ctx = canvas.getContext('2d');
           ctx.drawImage(img, 0, 0, width, height);
-
-          const resizedDataUrl = canvas.toDataURL('image/jpeg', 1); // Kualitas gambar dapat disesuaikan
-
-          const endTime = performance.now(); // Waktu selesai kompresi
-          const timeTaken = endTime - startTime; // Waktu yang diperlukan untuk kompresi
-          setCompressionTime(timeTaken);
-
-          setSelectedImage(imageDataUrl);
-          setResizedImage(resizedDataUrl);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+          downloadImage(dataUrl, `resized_${file.name}`);
+          resolve();
         };
+        img.src = event.target.result;
       };
       reader.readAsDataURL(file);
+    });
+  };
+
+  const handleFileChange = async (e) => {
+    const files = Array.from(e.target.files);
+    const startTime = performance.now();
+
+    for (let file of files) {
+      await resizeAndDownloadImage(file);
     }
+
+    const endTime = performance.now();
+    console.log(`Total Compression Time (Native) for ${files.length} images: ${(endTime - startTime).toFixed(2)} ms`);
   };
 
   return (
     <div>
-      <label htmlFor="imageUpload">Pilih Gambar:</label>
-      <input type="file" accept="image/*" id="imageUpload" onChange={handleImageUpload} />      
-      {resizedImage && <img src={resizedImage} alt="Resized" />}
-      {compressionTime && <p>Lama kompresi gambar: {compressionTime.toFixed(2)} ms</p>}
+      <input type="file" multiple onChange={handleFileChange} />
     </div>
   );
-}
+};
 
 export default UploadImageNative;
