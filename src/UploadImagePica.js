@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import Resizer from "react-image-file-resizer";
+import React, { useMemo, useState } from "react";
+import picaLib from "pica";
 
 const MAX_W = 800;
 const MAX_H = 800;
@@ -38,66 +38,44 @@ function computeStatsPSNR(aData, bData) {
   return { psnr, mse, mae };
 }
 
-// Resizer → Blob (biar ukurannya akurat)
-function resizeWithResizerToBlob(file, width, height, format = "JPEG", quality = 90, rotation = 0) {
-  return new Promise((resolve) => {
-    Resizer.imageFileResizer(
-      file,
-      width,
-      height,
-      format,
-      quality,
-      rotation,
-      (uri) => resolve(uri), // Blob (karena 'blob' di outputType)
-      "blob",
-      width, height,      // minWidth/minHeight → set = target buat konsisten
-      true,               // keepAspectRatio
-      true                // useWebWorker
-    );
-  });
-}
-
-export default function UploadImageResizer() {
+export default function UploadImagePica() {
+  const [filter, setFilter] = useState("lanczos3"); // 'hamming' | 'lanczos2' | 'lanczos3' | 'mks2013'
   const [rows, setRows] = useState([]);
   const [summary, setSummary] = useState(null);
+  const pica = useMemo(() => picaLib({ features: ["wasm", "ww", "js"] }), []);
 
   const processOne = async (file) => {
-    // load untuk tahu dimensi & bikin reference
     const img = document.createElement("img");
     img.src = URL.createObjectURL(file);
     await new Promise((r) => (img.onload = r));
 
     const { w, h } = getTargetSize(img.naturalWidth, img.naturalHeight);
 
-    // Reference (acuan metrik)
+    // Reference untuk metrik
     const refCanvas = drawRefCanvas(img, w, h);
     const refData = refCanvas.getContext("2d").getImageData(0, 0, w, h).data;
 
     const t0 = performance.now();
 
-    // Resize via react-image-file-resizer (JPEG Q=90)
-    const outBlob = await resizeWithResizerToBlob(file, w, h, "JPEG", 90, 0);
-    const outBytes = outBlob.size;
-
-    // Ambil pixel data hasil
-    const outImg = document.createElement("img");
-    outImg.src = URL.createObjectURL(outBlob);
-    await new Promise((r) => (outImg.onload = r));
-
+    // Resize pakai Pica
     const outCanvas = document.createElement("canvas");
     outCanvas.width = w; outCanvas.height = h;
-    outCanvas.getContext("2d").drawImage(outImg, 0, 0, w, h);
+    await pica.resize(img, outCanvas, { filter });
 
+    // Encode hasil ke JPEG untuk ukur ukuran file
+    const outBlob = await pica.toBlob(outCanvas, "image/jpeg", 0.9);
+    const outBytes = outBlob.size;
+
+    // Ambil pixel data untuk PSNR
     const outData = outCanvas.getContext("2d").getImageData(0, 0, w, h).data;
     const { psnr, mse, mae } = computeStatsPSNR(outData, refData);
 
     const t1 = performance.now();
 
     URL.revokeObjectURL(img.src);
-    URL.revokeObjectURL(outImg.src);
 
     return {
-      method: "resizer",
+      method: `pica-${filter}`,
       filename: file.name,
       w, h,
       origBytes: file.size,
@@ -112,6 +90,7 @@ export default function UploadImageResizer() {
     const files = Array.from(e.target.files || []);
     const results = [];
     for (const f of files) {
+      // proses sequential biar aman di device lemah
       /* eslint-disable no-await-in-loop */
       const r = await processOne(f);
       results.push(r);
@@ -141,7 +120,18 @@ export default function UploadImageResizer() {
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
-      <input type="file" multiple accept="image/*" onChange={onChange} />
+      <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+        <label>
+          Pica filter:&nbsp;
+          <select value={filter} onChange={(e) => setFilter(e.target.value)}>
+            <option value="lanczos3">lanczos3</option>
+            <option value="lanczos2">lanczos2</option>
+            <option value="hamming">hamming</option>
+            <option value="mks2013">mks2013</option>
+          </select>
+        </label>
+        <input type="file" multiple accept="image/*" onChange={onChange} />
+      </div>
 
       {rows.length > 0 && (
         <div style={{ overflowX: "auto" }}>

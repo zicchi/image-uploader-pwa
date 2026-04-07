@@ -1,35 +1,28 @@
-import React from 'react';
-import { BrowserRouter as Router, Route, Link, Routes } from 'react-router-dom'; // Perhatikan penggunaan Routes
-import UploadImageNative from './UploadImageNative';
-import Home from './Home';
-import UploadImage from './UploadImage';
+// App.js
+import React from "react";
+import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import Home from "./Home";
+import UploadImage from "./UploadImage";
+import UploadImageNative from "./UploadImageNative";
+import UploadImagePica from "./UploadImagePica";
+import PureRIFR from "./PureRIFR";
+import PurePica from "./PurePica";
+import AppMobileImageSelection from "./AppMobileImageSelection";
 
-function App() {
+export default function App() {
   return (
     <Router>
-      <div>
-        <nav>
-          <ul>
-            <li>
-              <Link to="/">Beranda</Link>
-            </li>
-            <li>
-              <Link to="/upload">Unggah Gambar dengan Libary</Link>              
-            </li>
-            <li>
-              <Link to="/native">Unggah Gambar dengan Native</Link>
-            </li>
-          </ul>
-        </nav>
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/upload" element={<UploadImage />} />
+        <Route path="/native" element={<UploadImageNative />} />
+        <Route path="/pica" element={<UploadImagePica />} />
+        <Route path="/pure-rifr" element={<PureRIFR />} />
+        <Route path="/pure-pica" element={<PurePica />} />
 
-        <Routes> {/* Gantikan Switch */}
-          <Route path="/" element={<Home />} />
-          <Route path="/upload" element={<UploadImage />} />
-          <Route path="/native" element={<UploadImageNative />} />
-        </Routes>
-      </div>
+        {/* Halaman mobile dengan bottom nav */}
+        <Route path="/mobile" element={<AppMobileImageSelection />} />
+      </Routes>
     </Router>
   );
 }
-
-export default App;
