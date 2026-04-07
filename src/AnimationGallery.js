@@ -3,18 +3,66 @@ import picaLib from "pica";
 import Resizer from "react-image-file-resizer";
 
 /* ═══ Constants ═══ */
-const ANIMS = ["scale", "rotate", "fade"];
-const ANIM_MS = 2000;
+const ANIMS = [
+  { key: "scale-fade", label: "Scale+Fade" },
+  { key: "rotate-fade", label: "Rotate+Fade" },
+  { key: "slide-fade", label: "Slide+Fade" },
+  { key: "scale-rotate", label: "Scale+Rotate" },
+  { key: "slide-scale", label: "Slide+Scale" },
+];
+const ANIM_MS = 2500;
+const COOLDOWN_MS = 2000; // jeda antar animasi untuk hindari bias
 
+/*
+ * Heavy animations — setiap animasi menggabungkan 2 transform +
+ * filter: blur() + brightness()/saturate()/contrast().
+ * filter:blur() memaksa GPU compute Gaussian convolution per-pixel
+ * setiap frame, sehingga benar-benar membebani device.
+ */
 const KEYFRAMES = `
-@keyframes b-scale  { 0%{transform:scale(1)} 50%{transform:scale(1.3)} 100%{transform:scale(1)} }
-@keyframes b-rotate { 0%{transform:rotate(0deg)} 100%{transform:rotate(360deg)} }
-@keyframes b-fade   { 0%{opacity:1} 50%{opacity:.08} 100%{opacity:1} }
+@keyframes b-scale-fade {
+  0%   { transform: scale(1);    opacity: 1;    filter: blur(0px) brightness(1); }
+  25%  { transform: scale(1.15); opacity: 0.5;  filter: blur(3px) brightness(1.3); }
+  50%  { transform: scale(1.35); opacity: 0.1;  filter: blur(6px) brightness(1.6); }
+  75%  { transform: scale(1.15); opacity: 0.5;  filter: blur(3px) brightness(1.3); }
+  100% { transform: scale(1);    opacity: 1;    filter: blur(0px) brightness(1); }
+}
+@keyframes b-rotate-fade {
+  0%   { transform: rotate(0deg);   opacity: 1;    filter: blur(0px) saturate(1); }
+  25%  { transform: rotate(90deg);  opacity: 0.5;  filter: blur(3px) saturate(2); }
+  50%  { transform: rotate(180deg); opacity: 0.1;  filter: blur(6px) saturate(3); }
+  75%  { transform: rotate(270deg); opacity: 0.5;  filter: blur(3px) saturate(2); }
+  100% { transform: rotate(360deg); opacity: 1;    filter: blur(0px) saturate(1); }
+}
+@keyframes b-slide-fade {
+  0%   { transform: translateX(0%);  opacity: 1;    filter: blur(0px) contrast(1); }
+  25%  { transform: translateX(15%); opacity: 0.5;  filter: blur(3px) contrast(1.4); }
+  50%  { transform: translateX(30%); opacity: 0.1;  filter: blur(6px) contrast(1.8); }
+  75%  { transform: translateX(15%); opacity: 0.5;  filter: blur(3px) contrast(1.4); }
+  100% { transform: translateX(0%);  opacity: 1;    filter: blur(0px) contrast(1); }
+}
+@keyframes b-scale-rotate {
+  0%   { transform: scale(1) rotate(0deg);      filter: blur(0px) brightness(1) contrast(1); }
+  25%  { transform: scale(1.15) rotate(90deg);  filter: blur(3px) brightness(1.3) contrast(1.2); }
+  50%  { transform: scale(1.35) rotate(180deg); filter: blur(6px) brightness(1.6) contrast(1.5); }
+  75%  { transform: scale(1.15) rotate(270deg); filter: blur(3px) brightness(1.3) contrast(1.2); }
+  100% { transform: scale(1) rotate(360deg);    filter: blur(0px) brightness(1) contrast(1); }
+}
+@keyframes b-slide-scale {
+  0%   { transform: translateX(0%) scale(1);     filter: blur(0px) saturate(1) brightness(1); }
+  25%  { transform: translateX(10%) scale(1.15); filter: blur(3px) saturate(2) brightness(1.2); }
+  50%  { transform: translateX(20%) scale(1.35); filter: blur(6px) saturate(3) brightness(1.5); }
+  75%  { transform: translateX(10%) scale(1.15); filter: blur(3px) saturate(2) brightness(1.2); }
+  100% { transform: translateX(0%) scale(1);     filter: blur(0px) saturate(1) brightness(1); }
+}
 `;
+
 const ANIM_CSS = {
-  scale: `b-scale ${ANIM_MS}ms ease-in-out`,
-  rotate: `b-rotate ${ANIM_MS}ms linear`,
-  fade: `b-fade ${ANIM_MS}ms ease-in-out`,
+  "scale-fade":   `b-scale-fade ${ANIM_MS}ms ease-in-out`,
+  "rotate-fade":  `b-rotate-fade ${ANIM_MS}ms ease-in-out`,
+  "slide-fade":   `b-slide-fade ${ANIM_MS}ms ease-in-out`,
+  "scale-rotate": `b-scale-rotate ${ANIM_MS}ms ease-in-out`,
+  "slide-scale":  `b-slide-scale ${ANIM_MS}ms ease-in-out`,
 };
 
 /* ═══ Helpers ═══ */
@@ -90,7 +138,7 @@ export default function AnimationGallery() {
     })();
   }, []);
 
-  /* ── pica resize ── */
+  /* ── pica resize (Hamming filter) ── */
   const picaResize = useCallback(
     async (file, maxW, maxH) => {
       const img = new Image();
@@ -112,7 +160,7 @@ export default function AnimationGallery() {
       dst.width = w;
       dst.height = h;
 
-      await pica.resize(src, dst);
+      await pica.resize(src, dst, { filter: "hamming" });
       return await pica.toBlob(dst, "image/jpeg", 0.8);
     },
     [pica]
@@ -187,25 +235,36 @@ export default function AnimationGallery() {
       );
       setDisplayUrls(blobUrls);
 
-      // 2) animate scale → rotate → fade
+      // 2) animate 5 types with cooldown between each
       const rows = [];
-      for (const anim of ANIMS) {
+      for (let ai = 0; ai < ANIMS.length; ai++) {
         if (cancelRef.current) break;
-        setPhase(`${anim.charAt(0).toUpperCase() + anim.slice(1)} — ${n} images`);
-        setActiveAnim(anim);
+        const { key, label } = ANIMS[ai];
+
+        // cooldown jeda (skip di iterasi pertama)
+        if (ai > 0) {
+          setPhase(`Cooldown ${COOLDOWN_MS / 1000}s...`);
+          setActiveAnim(null);
+          await new Promise((r) => setTimeout(r, COOLDOWN_MS));
+        }
+
+        if (cancelRef.current) break;
+        setPhase(`${label} — ${n} images`);
+        setActiveAnim(key);
         setAnimKey((k) => k + 1);
 
         const mb = getMemMB();
-        await new Promise((r) => requestAnimationFrame(r));
+        // wait 2 frames for animation to start + filter to apply
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
         startMeasure();
-        await new Promise((r) => setTimeout(r, ANIM_MS + 50));
+        await new Promise((r) => setTimeout(r, ANIM_MS + 100));
         const metrics = stopMeasure();
         const ma = getMemMB();
 
         rows.push({
           n,
           method: m,
-          anim,
+          anim: key,
           ...metrics,
           memBefore: mb,
           memAfter: ma,
@@ -213,11 +272,10 @@ export default function AnimationGallery() {
           resizeMs,
         });
         setResults([...rows]);
-        setActiveAnim(null);
-        await new Promise((r) => setTimeout(r, 200));
       }
 
       // cleanup
+      setActiveAnim(null);
       blobUrls.forEach((u) => {
         try { URL.revokeObjectURL(u); } catch (e) {}
       });
@@ -264,6 +322,9 @@ export default function AnimationGallery() {
         <div style={S.sub}>
           {cores} cores · RAM {devRam} · {allFiles.length} images loaded
         </div>
+        <div style={S.sub2}>
+          filter:blur(6px) + brightness/saturate/contrast per frame
+        </div>
       </div>
 
       {/* controls */}
@@ -288,7 +349,7 @@ export default function AnimationGallery() {
               onClick={() => setMethod(m)}
               disabled={busy}
             >
-              {m.toUpperCase()}
+              {m === "pica" ? "PICA (Hamming)" : "RIFR"}
             </button>
           ))}
         </div>
@@ -319,7 +380,7 @@ export default function AnimationGallery() {
       {/* phase indicator */}
       {phase && <div style={S.phase}>{phase}</div>}
 
-      {/* image grid */}
+      {/* image grid — larger sizes for heavier GPU load */}
       {displayUrls.length > 0 && (
         <div style={S.grid(displayUrls.length)}>
           {displayUrls.map((u, i) => (
@@ -329,7 +390,7 @@ export default function AnimationGallery() {
               alt=""
               style={{
                 width: "100%",
-                aspectRatio: "1",
+                aspectRatio: "4/3",
                 objectFit: "cover",
                 borderRadius: 6,
                 animation: activeAnim ? ANIM_CSS[activeAnim] : "none",
@@ -421,6 +482,7 @@ const S = {
   header: { padding: "20px 16px 12px", background: "#fff", borderBottom: "1px solid #eee" },
   title: { margin: 0, fontSize: 20, fontWeight: 700 },
   sub: { marginTop: 4, fontSize: 12, color: "#888" },
+  sub2: { marginTop: 2, fontSize: 11, color: "#b0b0b0", fontStyle: "italic" },
   controls: { padding: 16 },
   label: { fontSize: 14, marginBottom: 4, color: "#444" },
   toggle: (on) => ({
@@ -431,7 +493,7 @@ const S = {
     background: on ? "#111" : "#fff",
     color: on ? "#fff" : "#444",
     fontWeight: 600,
-    fontSize: 14,
+    fontSize: 13,
     cursor: "pointer",
   }),
   action: (bg) => ({
@@ -456,7 +518,7 @@ const S = {
   },
   grid: (n) => ({
     display: "grid",
-    gridTemplateColumns: `repeat(${n <= 4 ? 2 : n <= 12 ? 3 : 5}, 1fr)`,
+    gridTemplateColumns: `repeat(${n <= 3 ? 2 : n <= 9 ? 3 : n <= 16 ? 4 : 5}, 1fr)`,
     gap: 4,
     padding: "0 16px 12px",
   }),
