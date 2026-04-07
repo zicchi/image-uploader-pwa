@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
-import picaLib from "pica";
+import React, { useState, useEffect, useRef } from "react";
+import Resizer from "react-image-file-resizer";
+import pica from "pica";
 
 function useObjectURLPool() {
   const pool = useRef([]);
@@ -62,31 +63,39 @@ function computeStatsPSNR(aData, bData) {
   return { psnr, mse, mae };
 }
 
-/**
- * Tahap 1: Resize ke canvas (belum di-encode)
- * Pica instance di-pass dari luar supaya tidak dibuat ulang tiap file.
- */
-async function picaResizeToCanvas(p, file, width, height, filter = "lanczos3") {
-  const img = await readImage(file);
-  const src = document.createElement("canvas");
-  src.width = img.naturalWidth; src.height = img.naturalHeight;
-  src.getContext("2d").drawImage(img, 0, 0);
-  const dst = document.createElement("canvas");
-  dst.width = width; dst.height = height;
-  await p.resize(src, dst, { filter });
-  return dst; // canvas pixels — belum di-encode ke JPEG
+function rifrToBlob({ file, width, height, format = "JPEG", quality = 95 }) {
+  return new Promise((resolve) => {
+    Resizer.imageFileResizer(file, width, height, format, quality, 0,
+      (blob) => resolve(blob), "blob", width, height, true, true);
+  });
 }
 
-export default function PurePica({ autoFiles = null }) {
-  // Pica instance dibuat SEKALI (useMemo), tidak dibuat ulang per file
-  const pica = useMemo(() => picaLib({ features: ["wasm", "ww", "js"] }), []);
+async function hybridResize({ file, width, height, format, picaQuality, filter }) {
+  const imgOrig = await readImage(file);
+  const intW = Math.min(imgOrig.naturalWidth, width * 2);
+  const intH = Math.min(imgOrig.naturalHeight, height * 2);
+  const rifrFormat = format === "image/jpeg" ? "JPEG" : format === "image/webp" ? "WEBP" : "PNG";
+  const rifrBlob = await rifrToBlob({ file, width: intW, height: intH, format: rifrFormat, quality: 95 });
 
+  const p = pica({ features: ["wasm", "ww", "js"] });
+  const intImg = await readImage(rifrBlob);
+  const srcCanvas = document.createElement("canvas");
+  srcCanvas.width = intImg.naturalWidth; srcCanvas.height = intImg.naturalHeight;
+  srcCanvas.getContext("2d").drawImage(intImg, 0, 0);
+  const dstCanvas = document.createElement("canvas");
+  dstCanvas.width = width; dstCanvas.height = height;
+  await p.resize(srcCanvas, dstCanvas, { filter });
+  const finalBlob = await p.toBlob(dstCanvas, format, picaQuality);
+  return { finalBlob, dstCanvas, intW, intH };
+}
+
+export default function PureHybrid({ autoFiles = null }) {
   const [pass, setPass]         = useState(null);
   const [items, setItems]       = useState([]);
   const [summary, setSummary]   = useState(null);
   const [loading, setLoading]   = useState(false);
   const [pendingFiles, setPendingFiles] = useState([]);
-  const [opts, setOpts] = useState({ maxW: 800, maxH: 800, quality: 0.9, format: "image/jpeg", filter: "lanczos3" });
+  const [opts, setOpts] = useState({ maxW: 800, maxH: 800, picaQuality: 0.9, format: "image/jpeg", filter: "lanczos3" });
   const makeUrl = useObjectURLPool();
 
   const onPickFiles = (e) => {
@@ -107,15 +116,13 @@ export default function PurePica({ autoFiles = null }) {
       try {
         const img = await readImage(file);
         const { width, height } = getTargetSize(img.naturalWidth, img.naturalHeight, { maxW: opts.maxW, maxH: opts.maxH });
-        // Resize ke canvas dulu, lalu encode ke blob untuk dapat ukuran file
-        const dstCanvas = await picaResizeToCanvas(pica, file, width, height, opts.filter);
-        const blob = await pica.toBlob(dstCanvas, opts.format, opts.quality);
+        const { finalBlob } = await hybridResize({ file, width, height, format: opts.format, picaQuality: opts.picaQuality, filter: opts.filter });
         out.push({
           name: file.name,
-          origBytes: file.size, outBytes: blob.size,
-          deltaKB: (file.size - blob.size) / 1024,
-          ratio: ((1 - blob.size / file.size) * 100).toFixed(1),
-          beforeUrl: makeUrl(file), afterUrl: makeUrl(blob),
+          origBytes: file.size, outBytes: finalBlob.size,
+          deltaKB: (file.size - finalBlob.size) / 1024,
+          ratio: ((1 - finalBlob.size / file.size) * 100).toFixed(1),
+          beforeUrl: makeUrl(file), afterUrl: makeUrl(finalBlob),
           dimsText: `${width}×${height}`,
         });
         setItems([...out]);
@@ -127,7 +134,6 @@ export default function PurePica({ autoFiles = null }) {
   };
 
   // ── PASS 2: TIME ─────────────────────────────────────────────────────────
-  // Ukur resize + toBlob (konsisten dengan benchmark paper lama)
   const runTime = async () => {
     setItems([]); setSummary(null); setPass("time"); setLoading(true);
     const out = [];
@@ -136,8 +142,7 @@ export default function PurePica({ autoFiles = null }) {
         const img = await readImage(file);
         const { width, height } = getTargetSize(img.naturalWidth, img.naturalHeight, { maxW: opts.maxW, maxH: opts.maxH });
         const t0 = performance.now();
-        const dstCanvas = await picaResizeToCanvas(pica, file, width, height, opts.filter);
-        await pica.toBlob(dstCanvas, opts.format, opts.quality);
+        await hybridResize({ file, width, height, format: opts.format, picaQuality: opts.picaQuality, filter: opts.filter });
         const timeMs = performance.now() - t0;
         out.push({ name: file.name, timeMs });
         setItems([...out]);
@@ -150,7 +155,6 @@ export default function PurePica({ autoFiles = null }) {
   };
 
   // ── PASS 3: PSNR ─────────────────────────────────────────────────────────
-  // PSNR diambil dari canvas SEBELUM toBlob — konsisten dengan paper lama
   const runPSNR = async () => {
     setItems([]); setSummary(null); setPass("psnr"); setLoading(true);
     const out = [];
@@ -158,15 +162,9 @@ export default function PurePica({ autoFiles = null }) {
       try {
         const img = await readImage(file);
         const { width, height } = getTargetSize(img.naturalWidth, img.naturalHeight, { maxW: opts.maxW, maxH: opts.maxH });
-
-        // Reference: bilinear browser (sama dengan paper lama)
         const refData = drawRefCanvas(img, width, height).getContext("2d").getImageData(0, 0, width, height).data;
-
-        // Pica resize → ambil pixel dari canvas (pre-JPEG encoding)
-        const dstCanvas = await picaResizeToCanvas(pica, file, width, height, opts.filter);
-        const outData = dstCanvas.getContext("2d").getImageData(0, 0, width, height).data;
-
-        const { psnr, mse, mae } = computeStatsPSNR(outData, refData);
+        const { dstCanvas } = await hybridResize({ file, width, height, format: opts.format, picaQuality: opts.picaQuality, filter: opts.filter });
+        const { psnr, mse, mae } = computeStatsPSNR(dstCanvas.getContext("2d").getImageData(0, 0, width, height).data, refData);
         out.push({ name: file.name, psnr, mse, mae });
         setItems([...out]);
       } catch (e) { console.warn("Skip:", file.name, e); }
@@ -184,6 +182,7 @@ export default function PurePica({ autoFiles = null }) {
   const inp   = { border: "1px solid #ddd", borderRadius: "8px", padding: "6px 8px", width: "100px", fontSize: "13px", outline: "none" };
   const sel   = { ...inp, width: "130px" };
   const small = { fontSize: "11px", color: "#888" };
+  const badge = { display: "inline-block", padding: "2px 8px", borderRadius: "999px", fontSize: "11px", fontWeight: 600, background: "#111", color: "#fff", marginLeft: 8 };
   const passBtn = (active, color = "#111") => ({
     flex: 1, padding: "10px 0", borderRadius: "10px", fontSize: "13px", fontWeight: 700,
     border: `2px solid ${active ? color : "#ddd"}`,
@@ -195,7 +194,9 @@ export default function PurePica({ autoFiles = null }) {
 
   return (
     <section style={wrap}>
-      <h2 style={{ fontSize: 15, fontWeight: 700, margin: 0 }}>Pica — Compression</h2>
+      <h2 style={{ fontSize: 15, fontWeight: 700, margin: 0 }}>
+        Hybrid <span style={badge}>RIFR → Pica</span>
+      </h2>
 
       {/* Settings */}
       <div style={card}>
@@ -203,8 +204,7 @@ export default function PurePica({ autoFiles = null }) {
           <label style={lCol}>Max W<input type="number" style={inp} value={opts.maxW} min={1} onChange={(e) => setOpts(o => ({ ...o, maxW: Number(e.target.value || 0) }))} /></label>
           <label style={lCol}>Max H<input type="number" style={inp} value={opts.maxH} min={1} onChange={(e) => setOpts(o => ({ ...o, maxH: Number(e.target.value || 0) }))} /></label>
           <label style={lCol}>Quality
-            <input type="number" step="0.05" style={inp} value={opts.quality} min={0} max={1}
-              onChange={(e) => setOpts(o => ({ ...o, quality: Math.max(0, Math.min(1, Number(e.target.value || 0))) }))} />
+            <input type="number" step="0.05" style={inp} value={opts.picaQuality} min={0} max={1} onChange={(e) => setOpts(o => ({ ...o, picaQuality: Math.max(0, Math.min(1, Number(e.target.value || 0))) }))} />
           </label>
           <label style={lCol}>Format
             <select style={sel} value={opts.format} onChange={(e) => setOpts(o => ({ ...o, format: e.target.value }))}>
@@ -228,7 +228,7 @@ export default function PurePica({ autoFiles = null }) {
           Pilih gambar
           <input type="file" accept="image/*" multiple onChange={onPickFiles} />
         </label>
-        {pendingFiles.length > 0 && <span style={small}>{pendingFiles.length} file siap</span>}
+        {pendingFiles.length > 0 && <span style={small}>{pendingFiles.length} file siap · Pipeline: RIFR (2×) → Pica {opts.filter}</span>}
       </div>
 
       {/* 3 Pass Buttons */}
