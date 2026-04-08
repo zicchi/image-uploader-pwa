@@ -10,50 +10,122 @@ const ANIMS = [
   { key: "scale-rotate", label: "Scale+Rotate" },
   { key: "slide-scale", label: "Slide+Scale" },
 ];
-const ANIM_MS = 2500;
-const COOLDOWN_MS = 2000; // jeda antar animasi untuk hindari bias
+const ANIM_MS = 1500; // faster animation = harder on GPU
+const COOLDOWN_MS = 2000;
+const MAX_IMAGES = 200;
+const STEP = 5; // N increments: 5, 10, 15, ... 200
 
 /*
- * Heavy animations — setiap animasi menggabungkan 2 transform +
- * filter: blur() + brightness()/saturate()/contrast().
- * filter:blur() memaksa GPU compute Gaussian convolution per-pixel
- * setiap frame, sehingga benar-benar membebani device.
+ * HEAVY animations — setiap keyframe menggabungkan:
+ * - transform (scale/rotate/translate)
+ * - opacity
+ * - filter: blur(8px) + brightness + saturate + contrast
+ * - box-shadow (animated, forces repaint)
+ * - backdrop-filter via wrapper (extremely heavy)
+ *
+ * Granular 8-step keyframes (0/14/28/42/57/71/85/100%)
+ * untuk beban per-frame lebih realistis.
  */
 const KEYFRAMES = `
 @keyframes b-scale-fade {
-  0%   { transform: scale(1);    opacity: 1;    filter: blur(0px) brightness(1); }
-  25%  { transform: scale(1.15); opacity: 0.5;  filter: blur(3px) brightness(1.3); }
-  50%  { transform: scale(1.35); opacity: 0.1;  filter: blur(6px) brightness(1.6); }
-  75%  { transform: scale(1.15); opacity: 0.5;  filter: blur(3px) brightness(1.3); }
-  100% { transform: scale(1);    opacity: 1;    filter: blur(0px) brightness(1); }
+  0%   { transform: scale(1);    opacity: 1;   filter: blur(0px) brightness(1) saturate(1);
+         box-shadow: 0 0 0 rgba(0,0,0,0); }
+  14%  { transform: scale(1.08); opacity: 0.8; filter: blur(2px) brightness(1.15) saturate(1.3);
+         box-shadow: 0 4px 16px rgba(0,0,0,0.15); }
+  28%  { transform: scale(1.18); opacity: 0.5; filter: blur(5px) brightness(1.3) saturate(1.6);
+         box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
+  42%  { transform: scale(1.3);  opacity: 0.2; filter: blur(8px) brightness(1.5) saturate(2);
+         box-shadow: 0 12px 48px rgba(0,0,0,0.45); }
+  57%  { transform: scale(1.35); opacity: 0.1; filter: blur(10px) brightness(1.6) saturate(2.5);
+         box-shadow: 0 16px 60px rgba(0,0,0,0.5); }
+  71%  { transform: scale(1.18); opacity: 0.4; filter: blur(5px) brightness(1.3) saturate(1.6);
+         box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
+  85%  { transform: scale(1.08); opacity: 0.7; filter: blur(2px) brightness(1.1) saturate(1.2);
+         box-shadow: 0 4px 16px rgba(0,0,0,0.1); }
+  100% { transform: scale(1);    opacity: 1;   filter: blur(0px) brightness(1) saturate(1);
+         box-shadow: 0 0 0 rgba(0,0,0,0); }
 }
+
 @keyframes b-rotate-fade {
-  0%   { transform: rotate(0deg);   opacity: 1;    filter: blur(0px) saturate(1); }
-  25%  { transform: rotate(90deg);  opacity: 0.5;  filter: blur(3px) saturate(2); }
-  50%  { transform: rotate(180deg); opacity: 0.1;  filter: blur(6px) saturate(3); }
-  75%  { transform: rotate(270deg); opacity: 0.5;  filter: blur(3px) saturate(2); }
-  100% { transform: rotate(360deg); opacity: 1;    filter: blur(0px) saturate(1); }
+  0%   { transform: rotate(0deg);   opacity: 1;   filter: blur(0px) saturate(1) contrast(1);
+         box-shadow: 0 0 0 rgba(0,0,0,0); }
+  14%  { transform: rotate(50deg);  opacity: 0.8; filter: blur(2px) saturate(1.5) contrast(1.2);
+         box-shadow: 4px 4px 20px rgba(0,0,0,0.2); }
+  28%  { transform: rotate(100deg); opacity: 0.5; filter: blur(5px) saturate(2.2) contrast(1.4);
+         box-shadow: 8px 8px 36px rgba(0,0,0,0.35); }
+  42%  { transform: rotate(160deg); opacity: 0.2; filter: blur(8px) saturate(3) contrast(1.6);
+         box-shadow: 10px 10px 48px rgba(0,0,0,0.5); }
+  57%  { transform: rotate(220deg); opacity: 0.15; filter: blur(10px) saturate(3.5) contrast(1.8);
+         box-shadow: 8px 8px 36px rgba(0,0,0,0.45); }
+  71%  { transform: rotate(280deg); opacity: 0.4; filter: blur(5px) saturate(2) contrast(1.3);
+         box-shadow: 4px 4px 20px rgba(0,0,0,0.25); }
+  85%  { transform: rotate(330deg); opacity: 0.7; filter: blur(2px) saturate(1.3) contrast(1.1);
+         box-shadow: 2px 2px 10px rgba(0,0,0,0.1); }
+  100% { transform: rotate(360deg); opacity: 1;   filter: blur(0px) saturate(1) contrast(1);
+         box-shadow: 0 0 0 rgba(0,0,0,0); }
 }
+
 @keyframes b-slide-fade {
-  0%   { transform: translateX(0%);  opacity: 1;    filter: blur(0px) contrast(1); }
-  25%  { transform: translateX(15%); opacity: 0.5;  filter: blur(3px) contrast(1.4); }
-  50%  { transform: translateX(30%); opacity: 0.1;  filter: blur(6px) contrast(1.8); }
-  75%  { transform: translateX(15%); opacity: 0.5;  filter: blur(3px) contrast(1.4); }
-  100% { transform: translateX(0%);  opacity: 1;    filter: blur(0px) contrast(1); }
+  0%   { transform: translateX(0%);  opacity: 1;   filter: blur(0px) contrast(1) brightness(1);
+         box-shadow: 0 0 0 rgba(0,0,0,0); }
+  14%  { transform: translateX(8%);  opacity: 0.8; filter: blur(2px) contrast(1.2) brightness(1.15);
+         box-shadow: -4px 0 20px rgba(0,0,0,0.15); }
+  28%  { transform: translateX(18%); opacity: 0.5; filter: blur(5px) contrast(1.5) brightness(1.3);
+         box-shadow: -8px 0 36px rgba(0,0,0,0.3); }
+  42%  { transform: translateX(28%); opacity: 0.2; filter: blur(8px) contrast(1.8) brightness(1.5);
+         box-shadow: -12px 0 48px rgba(0,0,0,0.45); }
+  57%  { transform: translateX(22%); opacity: 0.15; filter: blur(10px) contrast(2) brightness(1.6);
+         box-shadow: -10px 0 40px rgba(0,0,0,0.4); }
+  71%  { transform: translateX(14%); opacity: 0.4; filter: blur(5px) contrast(1.4) brightness(1.2);
+         box-shadow: -6px 0 24px rgba(0,0,0,0.2); }
+  85%  { transform: translateX(6%);  opacity: 0.7; filter: blur(2px) contrast(1.15) brightness(1.08);
+         box-shadow: -3px 0 12px rgba(0,0,0,0.1); }
+  100% { transform: translateX(0%);  opacity: 1;   filter: blur(0px) contrast(1) brightness(1);
+         box-shadow: 0 0 0 rgba(0,0,0,0); }
 }
+
 @keyframes b-scale-rotate {
-  0%   { transform: scale(1) rotate(0deg);      filter: blur(0px) brightness(1) contrast(1); }
-  25%  { transform: scale(1.15) rotate(90deg);  filter: blur(3px) brightness(1.3) contrast(1.2); }
-  50%  { transform: scale(1.35) rotate(180deg); filter: blur(6px) brightness(1.6) contrast(1.5); }
-  75%  { transform: scale(1.15) rotate(270deg); filter: blur(3px) brightness(1.3) contrast(1.2); }
-  100% { transform: scale(1) rotate(360deg);    filter: blur(0px) brightness(1) contrast(1); }
+  0%   { transform: scale(1) rotate(0deg);        filter: blur(0px) brightness(1) contrast(1) saturate(1);
+         box-shadow: 0 0 0 rgba(0,0,0,0); }
+  14%  { transform: scale(1.08) rotate(50deg);    filter: blur(2px) brightness(1.2) contrast(1.15) saturate(1.3);
+         box-shadow: 4px 4px 20px rgba(0,0,0,0.2); }
+  28%  { transform: scale(1.18) rotate(100deg);   filter: blur(5px) brightness(1.4) contrast(1.3) saturate(1.8);
+         box-shadow: 8px 8px 36px rgba(0,0,0,0.35); }
+  42%  { transform: scale(1.3) rotate(160deg);    filter: blur(8px) brightness(1.6) contrast(1.5) saturate(2.2);
+         box-shadow: 12px 12px 48px rgba(0,0,0,0.5); }
+  57%  { transform: scale(1.35) rotate(220deg);   filter: blur(10px) brightness(1.7) contrast(1.6) saturate(2.8);
+         box-shadow: 10px 10px 40px rgba(0,0,0,0.45); }
+  71%  { transform: scale(1.18) rotate(280deg);   filter: blur(5px) brightness(1.3) contrast(1.25) saturate(1.6);
+         box-shadow: 6px 6px 24px rgba(0,0,0,0.25); }
+  85%  { transform: scale(1.06) rotate(330deg);   filter: blur(2px) brightness(1.1) contrast(1.1) saturate(1.2);
+         box-shadow: 2px 2px 10px rgba(0,0,0,0.1); }
+  100% { transform: scale(1) rotate(360deg);      filter: blur(0px) brightness(1) contrast(1) saturate(1);
+         box-shadow: 0 0 0 rgba(0,0,0,0); }
 }
+
 @keyframes b-slide-scale {
-  0%   { transform: translateX(0%) scale(1);     filter: blur(0px) saturate(1) brightness(1); }
-  25%  { transform: translateX(10%) scale(1.15); filter: blur(3px) saturate(2) brightness(1.2); }
-  50%  { transform: translateX(20%) scale(1.35); filter: blur(6px) saturate(3) brightness(1.5); }
-  75%  { transform: translateX(10%) scale(1.15); filter: blur(3px) saturate(2) brightness(1.2); }
-  100% { transform: translateX(0%) scale(1);     filter: blur(0px) saturate(1) brightness(1); }
+  0%   { transform: translateX(0%) scale(1);      filter: blur(0px) saturate(1) brightness(1) contrast(1);
+         box-shadow: 0 0 0 rgba(0,0,0,0); }
+  14%  { transform: translateX(5%) scale(1.08);   filter: blur(2px) saturate(1.5) brightness(1.15) contrast(1.15);
+         box-shadow: -4px 4px 20px rgba(0,0,0,0.2); }
+  28%  { transform: translateX(12%) scale(1.18);  filter: blur(5px) saturate(2.2) brightness(1.3) contrast(1.3);
+         box-shadow: -8px 8px 36px rgba(0,0,0,0.35); }
+  42%  { transform: translateX(20%) scale(1.3);   filter: blur(8px) saturate(3) brightness(1.5) contrast(1.5);
+         box-shadow: -12px 12px 48px rgba(0,0,0,0.5); }
+  57%  { transform: translateX(24%) scale(1.35);  filter: blur(10px) saturate(3.5) brightness(1.6) contrast(1.6);
+         box-shadow: -14px 14px 56px rgba(0,0,0,0.5); }
+  71%  { transform: translateX(14%) scale(1.18);  filter: blur(5px) saturate(2) brightness(1.25) contrast(1.25);
+         box-shadow: -6px 6px 24px rgba(0,0,0,0.25); }
+  85%  { transform: translateX(5%) scale(1.06);   filter: blur(2px) saturate(1.3) brightness(1.08) contrast(1.08);
+         box-shadow: -2px 2px 10px rgba(0,0,0,0.1); }
+  100% { transform: translateX(0%) scale(1);      filter: blur(0px) saturate(1) brightness(1) contrast(1);
+         box-shadow: 0 0 0 rgba(0,0,0,0); }
+}
+
+@keyframes bd-pulse {
+  0%   { backdrop-filter: blur(0px) brightness(1); }
+  50%  { backdrop-filter: blur(12px) brightness(1.3); }
+  100% { backdrop-filter: blur(0px) brightness(1); }
 }
 `;
 
@@ -99,7 +171,7 @@ export default function AnimationGallery() {
 
   const [allFiles, setAllFiles] = useState([]);
   const [loadingFiles, setLoadingFiles] = useState(true);
-  const [count, setCount] = useState(5);
+  const [count, setCount] = useState(10);
   const [method, setMethod] = useState("pica");
   const [running, setRunning] = useState(false);
   const [phase, setPhase] = useState("");
@@ -116,15 +188,16 @@ export default function AnimationGallery() {
   const ltRef = useRef([]);
   const obsRef = useRef(null);
 
-  /* ── load 30 files on mount ── */
+  /* ── load 200 files on mount ── */
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch("/assets/30/manifest.json");
+        const r = await fetch("/assets/200/manifest.json");
         const names = await r.json();
+        setPhase && setLoadingFiles(true);
         const files = [];
         for (const name of names) {
-          const res = await fetch(`/assets/30/${name}`);
+          const res = await fetch(`/assets/200/${name}`);
           if (!res.ok) continue;
           const blob = await res.blob();
           if (blob.size) files.push(new File([blob], name, { type: blob.type }));
@@ -136,7 +209,7 @@ export default function AnimationGallery() {
         setLoadingFiles(false);
       }
     })();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── pica resize (Hamming filter) ── */
   const picaResize = useCallback(
@@ -176,9 +249,7 @@ export default function AnimationGallery() {
         for (const e of list.getEntries()) ltRef.current.push(e.duration);
       });
       obsRef.current.observe({ entryTypes: ["longtask"] });
-    } catch (e) {
-      // longtask not supported (Safari)
-    }
+    } catch (e) {}
     const tick = (now) => {
       ftRef.current.push(now - last);
       last = now;
@@ -235,13 +306,12 @@ export default function AnimationGallery() {
       );
       setDisplayUrls(blobUrls);
 
-      // 2) animate 5 types with cooldown between each
+      // 2) animate 5 types with cooldown
       const rows = [];
       for (let ai = 0; ai < ANIMS.length; ai++) {
         if (cancelRef.current) break;
         const { key, label } = ANIMS[ai];
 
-        // cooldown jeda (skip di iterasi pertama)
         if (ai > 0) {
           setPhase(`Cooldown ${COOLDOWN_MS / 1000}s...`);
           setActiveAnim(null);
@@ -254,7 +324,6 @@ export default function AnimationGallery() {
         setAnimKey((k) => k + 1);
 
         const mb = getMemMB();
-        // wait 2 frames for animation to start + filter to apply
         await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
         startMeasure();
         await new Promise((r) => setTimeout(r, ANIM_MS + 100));
@@ -274,7 +343,6 @@ export default function AnimationGallery() {
         setResults([...rows]);
       }
 
-      // cleanup
       setActiveAnim(null);
       blobUrls.forEach((u) => {
         try { URL.revokeObjectURL(u); } catch (e) {}
@@ -286,12 +354,12 @@ export default function AnimationGallery() {
     [allFiles, picaResize]
   );
 
-  /* ── sweep 1→30 ── */
+  /* ── sweep 5,10,15...200 ── */
   const runSweep = useCallback(async () => {
     cancelRef.current = false;
     setSweeping(true);
     setSweepResults([]);
-    for (let n = 1; n <= 30; n++) {
+    for (let n = STEP; n <= MAX_IMAGES; n += STEP) {
       if (cancelRef.current) break;
       const rows = await runBench(n, method);
       setSweepResults((prev) => [...prev, ...rows]);
@@ -308,7 +376,7 @@ export default function AnimationGallery() {
   if (loadingFiles)
     return (
       <div style={{ padding: 40, textAlign: "center", fontFamily: "sans-serif" }}>
-        Loading 30 images...
+        Loading {MAX_IMAGES} images...
       </div>
     );
 
@@ -316,25 +384,26 @@ export default function AnimationGallery() {
     <div style={S.page}>
       <style>{KEYFRAMES}</style>
 
-      {/* header + device info */}
       <div style={S.header}>
         <h1 style={S.title}>Animation Benchmark</h1>
         <div style={S.sub}>
-          {cores} cores · RAM {devRam} · {allFiles.length} images loaded
+          {cores} cores · RAM {devRam} · {allFiles.length}/{MAX_IMAGES} images loaded
         </div>
         <div style={S.sub2}>
-          filter:blur(6px) + brightness/saturate/contrast per frame
+          blur(10px) + box-shadow + backdrop-filter + brightness/saturate/contrast
         </div>
       </div>
 
-      {/* controls */}
       <div style={S.controls}>
         <div style={{ marginBottom: 12 }}>
           <div style={S.label}>
             Images: <b>{count}</b>
+            <span style={{ color: "#aaa", marginLeft: 8, fontSize: 12 }}>
+              (step {STEP}, max {MAX_IMAGES})
+            </span>
           </div>
           <input
-            type="range" min={1} max={30} value={count}
+            type="range" min={STEP} max={MAX_IMAGES} step={STEP} value={count}
             onChange={(e) => setCount(+e.target.value)}
             disabled={busy}
             style={{ width: "100%" }}
@@ -367,7 +436,7 @@ export default function AnimationGallery() {
             onClick={runSweep}
             disabled={busy}
           >
-            Sweep 1→30
+            Sweep 5→200
           </button>
           {busy && (
             <button style={S.action("#dc2626")} onClick={handleStop}>
@@ -377,33 +446,49 @@ export default function AnimationGallery() {
         </div>
       </div>
 
-      {/* phase indicator */}
       {phase && <div style={S.phase}>{phase}</div>}
 
-      {/* image grid — larger sizes for heavier GPU load */}
+      {/* image grid with backdrop-filter overlay */}
       {displayUrls.length > 0 && (
         <div style={S.grid(displayUrls.length)}>
           {displayUrls.map((u, i) => (
-            <img
+            <div
               key={`${i}-${animKey}`}
-              src={u}
-              alt=""
               style={{
-                width: "100%",
-                aspectRatio: "4/3",
-                objectFit: "cover",
+                position: "relative",
                 borderRadius: 6,
-                animation: activeAnim ? ANIM_CSS[activeAnim] : "none",
+                overflow: "hidden",
               }}
-            />
+            >
+              <img
+                src={u}
+                alt=""
+                style={{
+                  width: "100%",
+                  aspectRatio: "4/3",
+                  objectFit: "cover",
+                  display: "block",
+                  animation: activeAnim ? ANIM_CSS[activeAnim] : "none",
+                }}
+              />
+              {/* backdrop-filter overlay — extremely heavy */}
+              {activeAnim && (
+                <div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    animation: `bd-pulse ${ANIM_MS}ms ease-in-out`,
+                    pointerEvents: "none",
+                  }}
+                />
+              )}
+            </div>
           ))}
         </div>
       )}
 
-      {/* single run results */}
       {results.length > 0 && !sweeping && <Table rows={results} />}
 
-      {/* sweep results */}
       {sweepResults.length > 0 && (
         <>
           <div style={{ padding: "8px 16px", display: "flex", gap: 8 }}>
@@ -518,8 +603,8 @@ const S = {
   },
   grid: (n) => ({
     display: "grid",
-    gridTemplateColumns: `repeat(${n <= 3 ? 2 : n <= 9 ? 3 : n <= 16 ? 4 : 5}, 1fr)`,
-    gap: 4,
+    gridTemplateColumns: `repeat(${n <= 4 ? 2 : n <= 12 ? 3 : n <= 30 ? 5 : n <= 80 ? 8 : 10}, 1fr)`,
+    gap: 2,
     padding: "0 16px 12px",
   }),
   th: {
