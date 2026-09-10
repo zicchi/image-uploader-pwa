@@ -25,3 +25,4 @@ yarn-error.log*
 # local image assets
 /assets
 /public/assets
+.claude/launch.json
